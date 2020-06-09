@@ -1,2 +1,3 @@
-# sd-ie-lib
- Substance Designer Custom Nodes LIbrary
+# Substance Designer Custom Nodes LIbrary
+## IE Curve Toolbox
+https://www.artstation.com/artwork/lV3BKG
