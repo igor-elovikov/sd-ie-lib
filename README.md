@@ -1,4 +1,4 @@
-# Substance Designer Custom Nodes LIbrary
+# Substance Designer Custom Nodes Library
 ## IE Curve Toolbox
 
 > lib/ie_curve.sbsar
