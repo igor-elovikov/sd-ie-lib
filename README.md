@@ -1,7 +1,7 @@
 # Substance Designer Custom Nodes LIbrary
 ## IE Curve Toolbox
 
-> lib\ie_curve.sbsar
+> lib/ie_curve.sbsar
 
 > curve_examples.sbs
 
