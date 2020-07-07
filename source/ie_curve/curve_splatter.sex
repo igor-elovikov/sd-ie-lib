@@ -1,0 +1,175 @@
+:: import "macros.sex" as macros
+
+:: if grayscale
+declare_inputs("curve_splatter")
+:: else
+declare_inputs("curve_splatter_color")
+:: endif
+
+:: for i in range(16)
+pt{{ i }} = get_float2("pt{{ i }}")
+:: endfor
+
+current_index = get_int("current_index")
+even_index = get_int("even_index")
+prev_point = get_float2("prev_point")
+acc_dist = get_float("acc_dist")
+total_dist = get_float("total_dist")
+n = get_float("$number") 
+iters = get_int("total_samples")
+is_closed = get_bool("is_closed")
+npoints = get_int("npoints")
+alpha = get_float("alpha")
+tension = get_float("tension")
+
+iters_m1 = iters - 1 if iters > 1 else iters
+iters_m1 = iters if is_closed and not is_resample else iters_m1
+fiters = tofloat(iters_m1)
+
+norm_iter = carving.x + n / fiters * (carving.y - carving.x)
+frag_size = 1.0 / get_float2("$size").x
+carved_niter = n / fiters
+
+mod_sample_non_carved = frag_size / 2.0 + norm_iter * (1.0 - frag_size)
+mod_sample_carved = frag_size / 2.0 + carved_niter * (1.0 - frag_size)
+
+:: for i in range(1, 9)
+modifier_op = modifier_{{ i }}_addmult
+mod_sample = mod_sample_carved if modifier{{ i }}_carve else mod_sample_non_carved
+modifier{{ i }} = samplelum(vector2(mod_sample, 0.5), {{ i + 8 }}, 0)
+modifier{{ i }} = modifier{{ i }} * modifier_op.x + modifier_op.y
+:: endfor
+
+{{ macros.get_modifier("remap", "remapping_mod") }}
+
+norm_iter = carving.x + remap * (carving.y - carving.x) if remapping_mod > 0 else norm_iter
+
+c_sample = {{ macros.sample_curve("norm_iter", "npoints", "is_closed", "alpha", "tension", "pt") }}
+point = c_sample.xy
+deriative = c_sample.zw
+orient_angle = atan2(deriative) / _2pi()
+
+sample_dist = get_float("min_dist")
+prev_point = point if n < 1.0 else prev_point
+
+segment_vector = point - prev_point
+segment_dist = length_vec2(segment_vector)
+
+segment_dir = normalize_vec2(segment_vector) if segment_dist > 0.0000001 else float2(0.0, 1.0)
+acc_dist = acc_dist + segment_dist
+
+overshoot = (acc_dist > sample_dist)
+overshoot_dist = acc_dist - sample_dist
+acc_dist = acc_dist if not overshoot else 0.0
+p_dst = segment_dist - overshoot_dist
+
+out_point = prev_point + segment_dir @ p_dst if overshoot else float2(0.0, 0.0)
+out_point = point if n < 1.0 else out_point
+out_point = point if not is_resample else out_point
+overshoot = True if n < 1.0 and is_resample else overshoot
+
+# Get modifiers
+:: if grayscale
+{{ macros.get_modifier("color_mod_m", "color_modifier_idx") }}
+{{ macros.get_modifier("color_var_mod_m", "color_var_modifier_idx") }}
+:: endif
+{{ macros.get_modifier("offset_mod", "offset_modifier_idx") }}
+{{ macros.get_modifier("offset_var_mod", "offset_var_modifier_idx") }}
+{{ macros.get_modifier("mask_mod", "mask_modifier_idx") }}
+{{ macros.get_modifier("offset_mod", "offset_modifier_idx") }}
+{{ macros.get_modifier("rot_mod", "rotation_modifier_idx") }}
+{{ macros.get_modifier("rot_var_mod", "rotation_var_modifier_idx") }}
+{{ macros.get_modifier("size_mod", "size_modifier_idx") }}
+{{ macros.get_modifier("size_var_mod", "size_var_modifier_idx") }}
+{{ macros.get_modifier("mirror_mod", "mirroring_modifier_idx", "0.0") }}
+{{ macros.get_modifier("size_mod_w", "size_modifier_idx_width") }}
+{{ macros.get_modifier("size_mod_h", "size_modifier_idx_height") }}
+{{ macros.get_modifier("sym_mod", "symmetry_modifier_idx", "1.0") }}
+
+# pattern rotation calculation
+
+rot = rotation * rot_mod + uniform_ab(-rotation_var, rotation_var) * rot_var_mod
+
+rot_calc = rot if not is_orient else orient_angle + rot + 0.25
+mirror_chance = uniform_ab(0.0, 1.0) < 0.5
+
+need_mirror = (mirroring == 1 and (is_orient and mirror_chance)) or (mirroring == 2 and (is_orient and even_index > 0))
+need_mirror = need_mirror or (mirroring == 3 and (is_orient and mirror_mod > 0.5))
+
+rot_calc = orient_angle - rot - 0.25 if need_mirror else rot_calc
+
+# pattern size calculation
+
+size_var = uniform_f2_ab(-pattern_size_var, pattern_size_var)
+size_var_u = uniform_ab(-size_uniform_var, size_uniform_var)
+
+size_var = size_var if not is_size_var_uniform else vector2(size_var_u, size_var_u)
+pattern_size = pattern_size if not is_size_var_uniform else vector2(pattern_size_uniform, pattern_size_uniform)
+
+size_m = vector2(size_mod, size_mod) if is_size_var_uniform else vector2(size_mod_w, size_mod_h)
+pattern_size_calc = pattern_size * size_m + size_var @ size_var_mod
+
+# symmetry
+
+{{ macros.symmetry_calculation() }}
+
+# pattern offset calculation
+
+offset_rand = uniform_f2_ab(-offset_var, offset_var) @ offset_var_mod
+pat_offset = pattern_offset @ offset_mod + offset_rand @ offset_var_mod
+
+pat_offset_for_color = pat_offset
+
+pat_offset = pat_offset * vector2(1.0, -1.0)
+coord_angle = rot_calc if not offset_space_curve else orient_angle
+
+local_up = rotate_vec2(vector2(0.0, 1.0), -coord_angle, float2(0.0, 0.0))
+local_right = rotate_vec2(vector2(0.0, 1.0), -coord_angle-0.25, float2(0.0, 0.0))
+
+pattern_size_calc = pattern_size_calc * vector2(1.0, -1.0) if need_mirror else pattern_size_calc
+pat_offset = pat_offset if offset_absolute_mode else pat_offset * pattern_size_calc
+
+out_point = out_point + local_up @ (pat_offset.y) + local_right @ (pat_offset.x)
+
+local_up = rotate_vec2(vector2(0.0, 1.0), -rot_calc, float2(0.0, 0.0))
+local_right = rotate_vec2(vector2(0.0, 1.0), -rot_calc-0.25, float2(0.0, 0.0))
+
+pivot_pos = pivot_pos * pattern_size_calc
+out_point = out_point + local_up @ (-pivot_pos.y) + local_right @ (pivot_pos.x)
+
+# Color calculation
+
+:: if grayscale
+{{ macros.calculate_grayscale() }}
+:: else
+{{ macros.calculate_color() }}
+:: endif
+
+prev_point = prev_point + point - prev_point
+total_dist = total_dist + segment_dist
+
+even_index = -even_index if overshoot and is_resample else even_index
+even_index = -even_index if not is_resample else even_index
+
+current_index = current_index + 1 if overshoot and is_resample else current_index
+current_index = current_index + 1 if not is_resample else current_index
+
+pattern_size_calc = pattern_size_calc * sym_mult
+
+export(current_index)
+export(even_index)
+export(out_point)
+export(prev_point)
+export(acc_dist)
+export(total_dist)
+export(norm_iter)
+export(modifier1)
+export(modifier2)
+export(modifier3)
+export(modifier4)
+export(modifier5)
+export(modifier6)
+export(modifier7)
+export(modifier8)
+export(rot_calc)
+export(pattern_size_calc)

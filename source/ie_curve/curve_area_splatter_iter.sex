@@ -1,0 +1,192 @@
+:: import "macros.sex" as macros
+
+:: if grayscale
+declare_inputs("curve_area_splatter")
+:: else
+declare_inputs("curve_area_splatter_color")
+:: endif
+
+:: for ci in range(16)
+:: for i in range(16)
+curve{{ ci }}_pt{{ i }} = get_float2("curve{{ ci }}_pt{{ i }}")
+:: endfor
+is_closed{{ ci }} = get_bool("is_closed{{ ci }}")
+alpha{{ ci }} = get_float("alpha{{ ci }}")
+tension{{ ci }} = get_float("tension{{ ci }}")
+npoints{{ ci }} = get_int("npoints{{ ci }}")
+:: endfor
+
+current_index = get_int("current_index")
+even_index = get_int("even_index")
+n = get_float("$number")
+iters = get_int("total_samples")
+
+prev_point = get_float2("prev_point")
+acc_dist = get_float("acc_dist")
+total_dist = get_float("total_dist")
+
+iters_m1 = iters - 1 if iters > 1 else iters
+iters_m1 = iters if is_closed0 and not is_resample else iters_m1
+fiters = tofloat(iters_m1)
+
+norm_iter = carving.x + n / fiters * (carving.y - carving.x)
+
+
+frag_size = 1.0 / get_float2("$size").x
+carved_niter = n / fiters
+
+mod_sample_non_carved = frag_size / 2.0 + norm_iter * (1.0 - frag_size)
+mod_sample_carved = frag_size / 2.0 + carved_niter * (1.0 - frag_size)
+
+:: for i in range(1, 9)
+
+modifier_op = modifier_{{ i }}_addmult
+
+mod_sample = mod_sample_carved if modifier{{ i }}_carve else mod_sample_non_carved
+
+modifier{{ i }} = samplelum(vector2(mod_sample, 0.5), {{ i + 23 }}, 0)
+modifier{{ i }} = modifier{{ i }} * modifier_op.x + modifier_op.y
+
+:: endfor
+
+c0_sample = {{ macros.sample_curve("norm_iter", "npoints0", "is_closed0", "alpha0", "tension0", "curve0_pt") }}
+
+point = c0_sample.xy
+
+sample_dist = get_float("min_dist")
+prev_point = point if n < 1.0 else prev_point
+
+segment_vector = point - prev_point
+segment_dist = length_vec2(segment_vector)
+
+segment_dir = normalize_vec2(segment_vector) if segment_dist > 0.0000001 else float2(0.0, 1.0)
+acc_dist = acc_dist + segment_dist
+
+overshoot = (acc_dist > sample_dist)
+overshoot_dist = acc_dist - sample_dist
+acc_dist = acc_dist if not overshoot else 0.0
+p_dst = segment_dist - overshoot_dist
+
+out_point = prev_point + segment_dir @ p_dst if overshoot else float2(0.0, 0.0)
+out_point = point if n < 1.0 or not is_resample else out_point
+overshoot = True if n < 1.0 else overshoot
+
+:: for i in range(1, 16)
+c0_sample = {{ macros.sample_curve("norm_iter", "npoints%d" % i, "is_closed%d" % i, "alpha%d" % i, "tension%d" % i, "curve%d_pt" % i) }}
+bridge_pt{{ i }} = c0_sample.xy
+:: endfor
+
+bridge_pt0 = out_point
+
+## Color calculation
+
+:: if grayscale
+{{ macros.get_modifier("color_mod_m", "color_modifier_idx") }}
+{{ macros.get_modifier("color_var_mod_m", "color_var_modifier_idx") }}
+:: endif
+{{ macros.get_modifier("mask_mod", "mask_modifier_idx") }}
+{{ macros.get_modifier("rot_mod", "rotation_modifier_idx") }}
+{{ macros.get_modifier("rot_var_mod", "rotation_var_modifier_idx") }}
+{{ macros.get_modifier("size_mod", "size_modifier_idx") }}
+{{ macros.get_modifier("size_var_mod", "size_var_modifier_idx") }}
+{{ macros.get_modifier("size_mod_w", "size_modifier_idx_width") }}
+{{ macros.get_modifier("size_mod_h", "size_modifier_idx_height") }}
+{{ macros.get_modifier("offset_mod", "offset_modifier_idx") }}
+{{ macros.get_modifier("offset_var_mod", "offset_var_modifier_idx") }}
+
+# Size calculation
+
+size_var = uniform_f2_ab(-pattern_size_var, pattern_size_var)
+size_var_u = uniform_ab(-size_uniform_var, size_uniform_var)
+
+size_var = vector2(size_var_u, size_var_u) if is_size_var_uniform else size_var
+pattern_size = pattern_size if not is_size_var_uniform else vector2(pattern_size_uniform, pattern_size_uniform)
+
+size_m = vector2(size_mod, size_mod) if is_size_var_uniform else vector2(size_mod_w, size_mod_h)
+pattern_size_calc = pattern_size * size_m + size_var @ size_var_mod
+
+# Offset calculation
+
+offset_var = uniform_f2_ab(-offset_var, offset_var)
+pattern_offset_calc = pattern_offset @ offset_mod + offset_var @ offset_var_mod
+pat_offset_for_color = pattern_offset_calc
+
+# Calculate rotation
+
+rot_var = uniform_ab(-rotation_var, rotation_var)
+pattern_rotation = rotation * rot_mod + rot_var * rot_var_mod + 0.25
+rot_calc = pattern_rotation
+
+# Color calculation
+
+:: if grayscale
+{{ macros.calculate_grayscale(false) }}
+:: else
+{{ macros.calculate_color(false, 32) }}
+:: endif
+
+# Calculate bridge samples 
+
+{{ macros.get_modifier("samples_mod", "bridge_samples_mod") }}
+
+bridge_samples = toint( tofloat(bridge_samples) * samples_mod )
+bridge_samples = 0 if not overshoot and is_resample else bridge_samples
+bridge_samples = 0 if is_masked else bridge_samples
+
+# Calculate index for bridge
+
+{{ macros.bridge_index_calculation() }}
+
+#####
+
+_OUT_ = bridge_samples
+
+bridge_samples_calc = bridge_samples
+
+prev_point = prev_point + point - prev_point
+total_dist = total_dist + segment_dist
+
+even_index = -even_index if overshoot and is_resample else even_index
+even_index = -even_index if not is_resample else even_index
+
+current_index = current_index + 1 if overshoot and is_resample else current_index
+current_index = current_index + 1 if not is_resample else current_index
+
+# Calculate symmetry
+
+{{ macros.get_modifier("sym_mod", "symmetry_modifier_idx", "1.0") }}
+{{ macros.symmetry_calculation() }}
+
+# Calculate bridge carving
+
+{{ macros.get_modifier("start_carve_mod", "bridge_start_carving_mod", "0.0") }}
+{{ macros.get_modifier("end_carve_mod", "bridge_end_carving_mod", "1.0") }}
+
+bridge_start_carve = start_carve_mod if use_carving_mod else carving_src.x
+bridge_end_carve = end_carve_mod if use_carving_mod else carving_src.y
+
+:: if not grayscale
+export(v_intencity)
+export(v_add_rot)
+:: endif
+export(bridge_start_carve)
+export(bridge_end_carve)
+export(sym_mult)
+export(bridge_index)
+export(bridge_samples_calc)
+export(out_color)
+export(pattern_size_calc)
+export(current_index)
+export(even_index)
+export(pattern_rotation)
+export(pattern_offset_calc)
+
+export(prev_point)
+export(acc_dist)
+export(total_dist)
+
+:: for i in range(16)
+
+export(bridge_pt{{ i }})
+
+:: endfor 

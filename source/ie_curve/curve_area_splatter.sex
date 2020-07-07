@@ -1,0 +1,150 @@
+:: import "macros.sex" as macros
+
+:: if grayscale
+declare_inputs("curve_area_splatter")
+:: else
+declare_inputs("curve_area_splatter_color")
+:: endif
+
+out_color = get_float4("out_color")
+pattern_size_calc = get_float2("pattern_size_calc")
+n = get_float("$number")
+bridge_samples = get_int("bridge_samples_calc")
+bridge_index = get_int("bridge_index")
+bridge_start_carve = get_float("bridge_start_carve")
+bridge_end_carve = get_float("bridge_end_carve")
+pattern_rotation = get_float("pattern_rotation")
+pattern_offset_calc = get_float2("pattern_offset_calc")
+number = toint(n) + bridge_index
+
+bridge_samples_num = bridge_samples - 1 if bridge_samples > 1 else bridge_samples
+bridge_samples_num = bridge_samples if closed_area else bridge_samples_num
+
+bridge_n = n / tofloat(bridge_samples_num)
+bridge_n = bridge_start_carve + bridge_n * (bridge_end_carve - bridge_start_carve) 
+
+frag_size = 1.0 / get_float2("$size").x
+carved_niter = n / tofloat(bridge_samples_num)
+
+mod_sample_non_carved = frag_size / 2.0 + bridge_n * (1.0 - frag_size)
+mod_sample_carved = frag_size / 2.0 + carved_niter * (1.0 - frag_size)
+
+:: for i in range(1, 9)
+modifier_op = modifier_{{ i }}_addmult
+
+mod_sample = mod_sample_carved if modifier{{ i }}_carve else mod_sample_non_carved
+
+bridge_modifier{{ i }} = samplelum(vector2(mod_sample, 0.5), {{ i + 23}}, 0)
+bridge_modifier{{ i }} = bridge_modifier{{ i }} * modifier_op.x + modifier_op.y
+:: endfor
+
+:: for i in range(16)
+bridge_pt{{ i }} = get_float2("bridge_pt{{ i }}")
+:: endfor
+
+{{ macros.get_bridge_modifier("size_mod", "bridge_size_mod") }}
+{{ macros.get_bridge_modifier("size_mod_w", "br_size_modifier_idx_width") }}
+{{ macros.get_bridge_modifier("size_mod_h", "br_size_modifier_idx_height") }}
+{{ macros.get_bridge_modifier("size_var_mod", "bridge_size_var_mod") }}
+{{ macros.get_bridge_modifier("rot_mod", "bridge_rotation_mod", "0.0") }}
+{{ macros.get_bridge_modifier("rot_var_mod", "bridge_rotation_var_mod") }}
+{{ macros.get_bridge_modifier("v_mod", "bridge_vertical_offset_mod", "0.0") }}
+{{ macros.get_bridge_modifier("v_var_mod", "bridge_vertical_offset_var_mod") }}
+{{ macros.get_bridge_modifier("h_mod", "bridge_horizontal_offset_mod", "0.0") }}
+{{ macros.get_bridge_modifier("h_var_mod", "bridge_horizontal_offset_var_mod") }}
+:: if grayscale
+{{ macros.get_bridge_modifier("col_mod", "bridge_color_mod") }}
+{{ macros.get_bridge_modifier("col_var_mod", "bridge_color_var_mod") }}
+:: endif
+{{ macros.get_bridge_modifier("remap", "bridge_remapping_mod") }}
+{{ macros.get_bridge_modifier("mask_mod", "bridge_mask_mod") }}
+{{ macros.get_bridge_modifier("idx_mod", "bridge_idx_distr_mod") }}
+{{ macros.get_bridge_modifier("sym_mod", "bridge_symmetry_mod", "1.0") }}
+
+bridge_n = (bridge_start_carve + remap * (bridge_end_carve - bridge_start_carve)) if bridge_remapping_mod > 0 else bridge_n
+
+c_sample = {{ macros.sample_curve("bridge_n", "curves_num", "closed_area", "bridge_alpha", "bridge_tension", "bridge_pt") }}
+
+point_calc = c_sample.xy
+deriative = c_sample.zw
+
+# get bridge direction
+rot_calc = pattern_rotation
+rot_calc = rot_calc + atan2(deriative) / _2pi() if is_orient else rot_calc
+norm_dir = normalize_vec2(deriative)
+dir_x_axis = rotate_vec2(norm_dir, -0.25, float2(0.0, 0.0))
+
+# offset
+v_offs_var = bridge_voffs_var * v_var_mod
+v_offs = pattern_offset_calc.y + v_mod + uniform_ab(-v_offs_var, v_offs_var)
+
+h_offs_var = bridge_hoffs_var * h_var_mod
+h_offs = pattern_offset_calc.x + h_mod + uniform_ab(-h_offs_var, h_offs_var)
+
+
+b_offs = norm_dir @ v_offs + dir_x_axis @ h_offs
+
+# size
+size_var = uniform_f2_ab(-bridge_size_var_nuniform, bridge_size_var_nuniform)
+size_var_u = uniform_ab(-bridge_size_var, bridge_size_var)
+size_var = vector2(size_var_u, size_var_u) if is_size_var_uniform else size_var
+
+size_m = vector2(size_mod, size_mod) if is_size_var_uniform else vector2(size_mod_w, size_mod_h)
+
+pattern_size_calc = (pattern_size_calc * size_m + size_var @ size_var_mod)
+
+# rotation
+rot_var = bridge_rotation_var * rot_var_mod
+rot_calc = rot_calc + (rot_mod + uniform_ab(-rot_var, rot_var))
+
+# pivot compensation
+pivot_pos = pivot_pos * pattern_size_calc
+
+pivot_rot_offset = rotate_vec2(pivot_pos, -rot_calc, float2(0.0, 0.0))
+point_calc = point_calc - pivot_rot_offset + b_offs
+
+# Calculate symmetry
+
+sym_mult = get_float2("sym_mult")
+{{ macros.symmetry_calculation("sym_mult_bridge") }}
+
+sym_mult = sym_mult * sym_mult_bridge
+
+bridge_pattern_size = pattern_size_calc * sym_mult
+bridge_pattern_rotation = rot_calc
+
+:: if grayscale
+{{ macros.calculate_bridge_grayscale() }}
+:: else
+{{ macros.calculate_bridge_color(33) }}
+:: endif
+
+
+# Calculate pattern index
+
+pattern_index = bridge_index
+
+ping_pong = 2 * inputs_num - 2
+ping_pong_loop = number % ping_pong
+pattern_ping_pong = ping_pong_loop if ping_pong_loop < inputs_num else ping_pong - ping_pong_loop 
+pattern_ping_pong = 0 if inputs_num == 1 else pattern_ping_pong
+
+pattern_random = uniform_ab(0.0, tofloat(inputs_num))
+pattern_random = toint(pattern_random)
+
+pattern_mod = idx_mod * tofloat(inputs_num)
+pattern_mod = toint(pattern_mod)
+pattern_mod = 0 if pattern_mod < 0 else pattern_mod
+pattern_mod = (inputs_num - 1) if pattern_mod > (inputs_num - 1) else pattern_mod
+
+pattern_index = number % inputs_num if pattern_bridge_distr_mode == 1 else pattern_index
+pattern_index = pattern_ping_pong if pattern_bridge_distr_mode == 2 else pattern_index
+pattern_index = pattern_random if pattern_bridge_distr_mode == 3 else pattern_index
+pattern_index = pattern_mod if pattern_bridge_distr_mode == 4 else pattern_index
+
+pattern_index = pattern_index + 16
+
+export(pattern_index)
+export(point_calc)
+export(bridge_pattern_size)
+export(bridge_pattern_rotation)

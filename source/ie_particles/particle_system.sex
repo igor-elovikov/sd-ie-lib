@@ -1,0 +1,86 @@
+#############################################################################################
+:: macro init_parameter_random(param_name, input_offset, additive = false, no_export = false)
+
+p_{{ param_name }} = uniform_ab({{ param_name }} - {{ param_name }} * {{ param_name }}_random, {{ param_name }})
+
+:: if input_offset > -1
+
+map_sample = samplelum(p_position, {{ input_offset }}, 1)
+:: if not additive
+p_{{ param_name }} = p_{{ param_name }} * map_sample if use_{{ param_name }}_map and not dynamic_{{ param_name }}_map else p_{{ param_name }}
+:: else
+p_{{ param_name }} = p_{{ param_name }} + map_sample if use_{{ param_name }}_map and not dynamic_{{ param_name }}_map else p_{{ param_name }}
+::endif
+
+:: if not no_export
+export(p_{{ param_name }})
+:: endif
+
+:: endif
+
+:: endmacro
+
+#############################################################################################
+:: macro init_parameter_var(param_name, input_offset, additive = false, no_export = false)
+p_{{ param_name }} = uniform_ab({{ param_name }} - {{ param_name }}_var, {{ param_name }} + {{ param_name }}_var)
+
+:: if input_offset > -1
+
+map_sample = samplelum(p_position, {{ input_offset }}, 1)
+:: if not additive
+p_{{ param_name }} = p_{{ param_name }} * map_sample if use_{{ param_name }}_map and not dynamic_{{ param_name }}_map else p_{{ param_name }}
+:: else
+p_{{ param_name }} = p_{{ param_name }} + map_sample if use_{{ param_name }}_map and not dynamic_{{ param_name }}_map else p_{{ param_name }}
+::endif
+
+:: if not no_export
+export(p_{{ param_name }})
+:: endif
+
+:: endif
+
+:: endmacro
+
+#############################################################################################
+:: macro calculate_modifier_sample()
+outp_size = get_float2("$size")
+frag_size = 1.0 / outp_size.x
+modifier_sample = vector2(frag_size / 2.0 + norm_life * (1.0 - frag_size), 0.5)
+glob_lifetime = get_int("lifetime")
+glob_life = n / (tofloat(glob_lifetime) - 1.0) if glob_lifetime > 1 else 0.0
+modifier_sample_global = vector2(frag_size / 2.0 + glob_life  * (1.0 - frag_size), 0.5)
+:: endmacro
+
+#############################################################################################
+:: macro apply_modifiers(param_name, input_offset, additive = false)
+
+param_mod_sample = modifier_sample_global if {{ param_name }}_modifier_mode else modifier_sample
+modifier = samplelum(param_mod_sample, {{ 16 + input_offset }}, 0)
+
+:: if not additive
+p_{{ param_name }} = p_{{ param_name }} * modifier if use_{{ param_name }}_modifier else p_{{ param_name }}
+:: else
+p_{{ param_name }} = p_{{ param_name }} + modifier if use_{{ param_name }}_modifier else p_{{ param_name }}
+:: endif
+
+map_sample = samplelum(p_position, {{ 9 + input_offset }}, 1)
+:: if not additive
+p_{{ param_name }} = p_{{ param_name }} * map_sample if use_{{ param_name }}_map and dynamic_{{ param_name }}_map else p_{{ param_name }}
+:: else
+p_{{ param_name }} = p_{{ param_name }} + map_sample if use_{{ param_name }}_map and dynamic_{{ param_name }}_map else p_{{ param_name }}
+:: endif
+
+:: endmacro
+
+#############################################################################################
+:: macro sample_curve(factor, npoints, is_closed, alpha, tension, point_prefix, start_index = 0):
+catmull_rom_16({{ factor }},
+    {{ npoints }},
+    {{ is_closed }},
+    {{ alpha }},
+    {{ tension }},
+:: for p_i in range(start_index, start_index + 16):
+    {{ point_prefix }}{{ p_i }},
+:: endfor 
+)
+:: endmacro

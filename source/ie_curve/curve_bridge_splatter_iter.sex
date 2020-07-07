@@ -1,0 +1,270 @@
+:: import "macros.sex" as macros
+
+:: if grayscale
+declare_inputs("curve_bridge_splatter")
+:: else
+declare_inputs("curve_bridge_splatter_color")
+:: endif
+
+
+:: for i in range(16)
+pt{{ i }} = get_float2("pt{{ i }}")
+spt{{ i }} = get_float2("spt{{ i }}")
+:: endfor
+
+current_index = get_int("current_index")
+even_index = get_int("even_index")
+alpha = get_float("alpha")
+tension = get_float("tension")
+npoints = get_int("npoints")
+is_closed = get_bool("is_closed")
+alpha_src = get_float("alpha_src")
+tension_src = get_float("tension_src")
+npoints_src = get_int("npoints_src")
+is_closed_src = get_bool("is_closed_src")
+
+prev_point = get_float2("prev_point")
+acc_dist = get_float("acc_dist")
+total_dist = get_float("total_dist")
+
+n = get_float("$number")
+iters = get_int("total_samples")
+
+dest_carved = (carving.x > 0.0) or (carving.y < 1.0)
+
+_iters_m1 = iters - 1 if iters > 1 else iters
+iters_m1 = iters if (is_closed and not is_resample) and not dest_carved else _iters_m1
+fiters = tofloat(iters_m1)
+
+iters_m1_src = iters if (is_closed_src and not is_resample) else _iters_m1
+fiters_src = tofloat(iters_m1_src)
+
+norm_iter = carving.x + n / fiters * (carving.y - carving.x)
+
+iter_ping_pong = n / fiters_src
+iter_ping_pong = iter_ping_pong * 2.0 if iter_ping_pong < 0.5 else 1.0 - (iter_ping_pong - 0.5) * 2.0
+src_iter = iter_ping_pong if source_ping_pong else n / fiters
+
+norm_iter_src = carving_src.x + src_iter * (carving_src.y - carving_src.x)
+
+frag_size = 1.0 / get_float2("$size").x
+carved_niter = n / fiters
+
+mod_sample_non_carved = frag_size / 2.0 + norm_iter * (1.0 - frag_size)
+mod_sample_carved = frag_size / 2.0 + carved_niter * (1.0 - frag_size)
+
+:: for i in range(1, 9)
+modifier_op = modifier_{{ i }}_addmult
+
+mod_sample = mod_sample_carved if modifier{{ i }}_carve else mod_sample_non_carved
+
+modifier{{ i }} = samplelum(vector2(mod_sample, 0.5), {{ i + 9 }}, 0)
+modifier{{ i }} = modifier{{ i }} * modifier_op.x + modifier_op.y
+:: endfor
+
+c_sample = {{ macros.sample_curve("norm_iter", "npoints", "is_closed", "alpha", "tension", "pt") }}
+point = c_sample.xy
+deriative = c_sample.zw
+
+sample_dist = get_float("min_dist")
+prev_point = point if n < 1.0 else prev_point
+
+segment_vector = point - prev_point
+segment_dist = length_vec2(segment_vector)
+
+segment_dir = normalize_vec2(segment_vector) if segment_dist > 0.0000001 else float2(0.0, 1.0)
+acc_dist = acc_dist + segment_dist
+
+overshoot = (acc_dist > sample_dist)
+overshoot_dist = acc_dist - sample_dist
+acc_dist = acc_dist if not overshoot else 0.0
+p_dst = segment_dist - overshoot_dist
+
+out_point = prev_point + segment_dir @ p_dst if overshoot else float2(0.0, 0.0)
+out_point = point if n < 1.0 or not is_resample else out_point
+overshoot = True if n < 1.0 else overshoot
+
+
+## Calculate src curve
+
+c_sample = {{ macros.sample_curve("norm_iter_src", "npoints_src", "is_closed_src", "alpha_src", "tension_src", "spt") }}
+src_point = c_sample.xy
+
+##############
+
+:: if grayscale
+{{ macros.get_modifier("color_mod_m", "color_modifier_idx") }}
+{{ macros.get_modifier("color_var_mod_m", "color_var_modifier_idx") }}
+:: endif
+{{ macros.get_modifier("offset_mod", "offset_modifier_idx") }}
+{{ macros.get_modifier("offset_var_mod", "offset_var_modifier_idx") }}
+{{ macros.get_modifier("mask_mod", "mask_modifier_idx") }}
+{{ macros.get_modifier("rot_mod", "rotation_modifier_idx") }}
+{{ macros.get_modifier("rot_var_mod", "rotation_var_modifier_idx") }}
+{{ macros.get_modifier("size_mod", "size_modifier_idx") }}
+{{ macros.get_modifier("size_mod_w", "size_modifier_idx_width") }}
+{{ macros.get_modifier("size_mod_h", "size_modifier_idx_height") }}
+{{ macros.get_modifier("size_var_mod", "size_var_modifier_idx") }}
+{{ macros.get_modifier("src_offset_mod", "src_offset_modifier_idx") }}
+{{ macros.get_modifier("src_offset_var_mod", "src_offset_var_modifier_idx") }}
+{{ macros.get_modifier("dst_offset_mod", "dst_offset_modifier_idx") }}
+{{ macros.get_modifier("dst_offset_var_mod", "dst_offset_var_modifier_idx") }}
+
+
+offset_rand = uniform_f2_ab(-offset_var, offset_var) @ offset_var_mod
+pat_offset = pattern_offset @ offset_mod + offset_rand @ offset_var_mod
+pat_offset = pat_offset * vector2(1.0, -1.0)
+pat_offset_for_color = pat_offset
+
+angle_dir = atan2(deriative) / _2pi()
+orient_angle = angle_dir
+rot = rotation
+rot_var = rotation_var
+
+src_offset_v = src_offset @ src_offset_mod + uniform_f2_ab(-src_offset_var, src_offset_var) @ src_offset_var_mod
+dst_offset_v = dst_offset @ dst_offset_mod + uniform_f2_ab(-dst_offset_var, dst_offset_var) @ dst_offset_var_mod
+
+################
+
+pattern_direction = out_point - src_point
+norm_dir = normalize_vec2(pattern_direction)
+dir_x_axis = rotate_vec2(norm_dir, -0.25, float2(0.0, 0.0))
+
+direction_dist = distance_vec2(float2(0.0, 0.0), pattern_direction)
+mapping_scale = 1.0 if offset_absolute_mode else direction_dist
+
+src_point = src_point + norm_dir @ (src_offset_v.y * mapping_scale)
+src_point = src_point + dir_x_axis @ (src_offset_v.x * mapping_scale)
+
+out_point = out_point + norm_dir @ (dst_offset_v.y * mapping_scale)
+out_point = out_point + dir_x_axis @ (dst_offset_v.x * mapping_scale)
+
+dst_point = out_point
+
+pattern_direction = out_point - src_point
+
+direction_angle = atan2(pattern_direction) / _2pi() + 0.25
+direction_dist = distance_vec2(float2(0.0, 0.0), pattern_direction)
+direction_scale = vector2(direction_dist, direction_dist)
+
+source_offset = norm_dir @ (-pat_offset.y * direction_dist) + dir_x_axis @ (pat_offset.x * direction_dist)
+pattern_center = src_point + source_offset
+
+add_rot = rot * rot_mod + uniform_ab(-rot_var, rot_var) * rot_var_mod
+rot_calc = add_rot + direction_angle if is_orient else add_rot
+
+# size
+
+size_var = uniform_f2_ab(-pattern_size_var, pattern_size_var)
+size_var_u = uniform_ab(-size_uniform_var, size_uniform_var)
+
+size_var = vector2(size_var_u, size_var_u) if is_size_var_uniform and not is_size_relative else size_var
+pattern_size = pattern_size if not is_size_var_uniform or is_size_relative else vector2(pattern_size_uniform, pattern_size_uniform)
+
+size_m = vector2(size_mod, size_mod) if is_size_var_uniform else vector2(size_mod_w, size_mod_h)
+
+pattern_size_calc = pattern_size * size_m + size_var @ size_var_mod
+const_width = pattern_size_calc.x
+
+pattern_size_calc = pattern_size_calc * direction_scale if is_size_relative else pattern_size_calc
+pattern_size_calc = vector2(const_width, pattern_size_calc.y) if not is_size_var_uniform and is_width_constant else pattern_size_calc
+
+pivot_pos = pivot_pos * pattern_size_calc
+pivot_pos = rotate_vec2(pivot_pos, -direction_angle, float2(0.0, 0.0))
+
+pivot_rot_offset = rotate_vec2(pivot_pos, -add_rot, float2(0.0, 0.0))
+
+out_point = pattern_center - pivot_rot_offset
+
+# Color
+
+:: if grayscale
+{{ macros.calculate_grayscale(false) }}
+:: else
+{{ macros.calculate_color(false, 18) }}
+:: endif
+
+# Calculate bridge samples 
+
+{{ macros.get_modifier("samples_mod", "bridge_samples_mod") }}
+{{ macros.get_modifier("distance_mod", "bridge_distance_mod") }}
+
+bridge_samples = toint( tofloat(bridge_samples) * samples_mod )
+bridge_distance = bridge_distance * distance_mod
+
+samples_by_dist = toint( direction_dist / bridge_distance )
+bridge_length = tofloat(samples_by_dist) * bridge_distance
+
+bridge_samples = 1 if bridge_type == 0 else bridge_samples
+bridge_samples = (samples_by_dist + 1) if bridge_type == 2 else bridge_samples
+dst_point = (src_point + norm_dir @ bridge_length) if bridge_type == 2 else dst_point
+
+bridge_samples = 0 if not overshoot and is_resample else bridge_samples
+bridge_samples = 0 if is_masked else bridge_samples
+
+bridge_length = length_vec2(dst_point - src_point)
+
+# Calculate index for bridge
+
+{{ macros.bridge_index_calculation() }}
+
+#####
+
+_OUT_ = bridge_samples
+
+bridge_samples_calc = bridge_samples
+
+prev_point = prev_point + point - prev_point
+total_dist = total_dist + segment_dist
+
+even_index = -even_index if overshoot and is_resample else even_index
+even_index = -even_index if not is_resample else even_index
+
+current_index = current_index + 1 if overshoot and is_resample else current_index
+current_index = current_index + 1 if not is_resample else current_index
+
+# Calculate symmetry
+
+{{ macros.get_modifier("sym_mod", "symmetry_modifier_idx", "1.0") }}
+{{ macros.symmetry_calculation() }}
+
+ping_pong_mirror = source_ping_pong and ((n / fiters_src) >= 0.5 )
+sym_mult = sym_mult * vector2(-1.0, 1.0) if ping_pong_mirror else sym_mult
+
+:: if not grayscale
+export(v_intencity)
+export(v_add_rot)
+:: endif
+export(sym_mult)
+export(bridge_length)
+export(bridge_index)
+export(norm_dir)
+export(dir_x_axis)
+export(bridge_samples_calc)
+export(direction_dist)
+export(out_color)
+export(source_offset)
+export(direction_angle)
+export(add_rot)
+export(pat_offset)
+export(pattern_size_calc)
+export(rot_calc)
+export(current_index)
+export(even_index)
+export(out_point)
+export(src_point)
+export(dst_point)
+export(point)
+export(prev_point)
+export(acc_dist)
+export(angle_dir)
+export(total_dist)
+export(norm_iter)
+export(modifier1)
+export(modifier2)
+export(modifier3)
+export(modifier4)
+export(modifier5)
+export(modifier6)
+export(modifier7)
+export(modifier8)

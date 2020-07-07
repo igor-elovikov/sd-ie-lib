@@ -1,0 +1,244 @@
+#################################################################################################
+
+:: macro sample_curve(factor, npoints, is_closed, alpha, tension, point_prefix, start_index = 0):
+catmull_rom_16({{ factor }},
+    {{ npoints }},
+    {{ is_closed }},
+    {{ alpha }},
+    {{ tension }},
+:: for p_i in range(start_index, start_index + 16):
+    {{ point_prefix }}{{ p_i }},
+:: endfor 
+)
+:: endmacro
+
+#################################################################################################
+
+:: macro get_modifier(modifier_var, modifier_index, def_value = "1.0")
+{{ modifier_var }} = switch_float1_8_inputs(
+    {{ modifier_index }} - 1,
+    modifier1,
+    modifier2,
+    modifier3,
+    modifier4,
+    modifier5,
+    modifier6,
+    modifier7,
+    modifier8
+)
+{{ modifier_var }} = {{ def_value }} if {{ modifier_index }} < 1 else {{ modifier_var }}
+:: endmacro
+
+#################################################################################################
+
+:: macro get_bridge_modifier(modifier_var, modifier_index, def_value = "1.0")
+{{ modifier_var }} = switch_float1_8_inputs(
+    {{ modifier_index }} - 1,
+    bridge_modifier1,
+    bridge_modifier2,
+    bridge_modifier3,
+    bridge_modifier4,
+    bridge_modifier5,
+    bridge_modifier6,
+    bridge_modifier7,
+    bridge_modifier8
+)
+{{ modifier_var }} = {{ def_value }} if {{ modifier_index }} < 1 else {{ modifier_var }}
+:: endmacro
+
+#################################################################################################
+
+## Masking macro
+:: macro masking()
+rnd01 = uniform_ab(0.0, 1.0)
+mask_total = (1.0 - mask_random) * mask_mod
+is_masked = rnd01 > mask_total
+is_masked = (not is_masked) if mask_inverted else is_masked
+out_alpha = 0.0 if is_masked else out_alpha
+:: endmacro
+
+#################################################################################################
+
+:: macro symmetry_calculation(sym_var_name="sym_mult")
+rnd01 = uniform_ab(0.0, 1.0)
+mask_total = (1.0 - symmetry_random * sym_mod )
+is_sym = rnd01 > mask_total
+
+h_sym = 1.0
+h_sym = -1.0 if is_sym and uniform_ab(0.0, 1.0) < 0.5 else h_sym
+v_sym = 1.0
+v_sym = -1.0 if is_sym and uniform_ab(0.0, 1.0) < 0.5 else v_sym
+h_sym = 1.0 if symmetry_mode == 2 else h_sym
+v_sym = 1.0 if symmetry_mode == 1 else v_sym
+{{ sym_var_name }} = vector2(h_sym, v_sym)
+:: endmacro
+
+#################################################################################################
+
+:: macro bridge_index_calculation()
+{{ get_modifier("idx_mod", "idx_distr_mod") }}
+
+bridge_index = uniform_ab(0.0, tofloat(inputs_num))
+bridge_index = toint(bridge_index)
+
+ping_pong = 2 * inputs_num - 2
+ping_pong_loop = current_index % ping_pong
+pattern_ping_pong = ping_pong_loop if ping_pong_loop < inputs_num else ping_pong - ping_pong_loop 
+pattern_ping_pong = 0 if inputs_num == 1 else pattern_ping_pong
+
+pattern_mod = idx_mod * tofloat(inputs_num)
+pattern_mod = toint(pattern_mod)
+pattern_mod = 0 if pattern_mod < 0 else pattern_mod
+pattern_mod = (inputs_num - 1) if pattern_mod > (inputs_num - 1) else pattern_mod
+
+bridge_index = current_index % inputs_num if pattern_distr_mode == 1 else bridge_index
+bridge_index = pattern_ping_pong if pattern_distr_mode == 2 else bridge_index
+bridge_index = pattern_mod if pattern_distr_mode == 3 else bridge_index
+:: endmacro
+
+#################################################################################################
+
+:: macro masking_and_fade_by_dist(include_overshoot_masking=true)
+:: if include_overshoot_masking
+out_alpha = 0.0 if not overshoot else alpha_calc 
+out_alpha = alpha_calc if n < 1.0 else out_alpha
+out_alpha = alpha_calc if not is_resample else out_alpha
+:: endif
+
+offset_distance = distance_vec2(float2(0.0, 0.0), pat_offset_for_color)
+distance_factor = offset_distance / fade_distance
+out_alpha = lerp(out_alpha, 0.0, distance_factor) if fade_by_dist else out_alpha
+{{ masking() }}
+:: endmacro
+
+#################################################################################################
+
+# grayscale macro
+:: macro calculate_grayscale(set_output=true):
+alpha_base = pattern_color * color_mod_m
+alpha_var = alpha_base - pattern_color_var * color_var_mod_m * alpha_base
+alpha_calc = uniform_ab(alpha_var, alpha_base)
+
+{{ masking_and_fade_by_dist() }}
+
+out_color = merge_float4(out_alpha, out_alpha, out_alpha, out_alpha)
+:: if set_output
+_OUT_ = out_color
+:: endif
+:: endmacro
+
+#################################################################################################
+
+# color macro
+:: macro calculate_color(set_output=true, color_modifier_index=17):
+{{ get_modifier("hue_mod", "hue_var_modifier_idx") }}
+{{ get_modifier("sat_mod", "sat_var_modifier_idx") }}
+{{ get_modifier("lum_mod", "lum_var_modifier_idx") }}
+{{ get_modifier("opa_mod", "opa_var_modifier_idx") }}
+
+{{ get_modifier("intencity_mod", "vmap_intencity_mod") }}
+{{ get_modifier("intencity_var_mod", "vmap_intencity_var_mod") }}
+{{ get_modifier("add_rot_mod", "vmap_add_rot_mod") }}
+{{ get_modifier("add_rot_var_mod", "vmap_add_rot_var_mod") }}
+
+v_intencity = vmap_intencity * intencity_mod + uniform_ab(-vmap_intencity_var, vmap_intencity_var) * intencity_var_mod
+v_add_rot = vmap_add_rot * add_rot_mod + uniform_ab(-vmap_add_rot_var, vmap_add_rot_var) * add_rot_var_mod
+
+color_mod_sample = mod_sample_carved if color_modifier_carve else mod_sample
+color_modifier = samplecol(vector2(color_mod_sample, 0.5), {{ color_modifier_index }}, 0)
+
+hsl_mod = merge_float3(hue_mod, sat_mod, lum_mod)
+pat_color = pattern_color * color_modifier if use_color_modifier else pattern_color
+
+pat_color_hsl = rgbtohsv(pat_color.xyz)
+pat_color_hsl_var = pattern_color_var.xyz * hsl_mod
+
+pat_color_base = pat_color_hsl - pat_color_hsl_var * pat_color_hsl
+pat_hsl_result = uniform_f3_ab(pat_color_base, pat_color_hsl)
+pat_rgb_result = hsvtorgb(pat_hsl_result)
+
+alpha_base = pat_color.w
+alpha_var = alpha_base - pattern_color_var.w * opa_mod * alpha_base
+alpha_calc = uniform_ab(alpha_var, alpha_base)
+
+alpha_calc = v_intencity if color_mode == 1 else alpha_calc
+
+{{ masking_and_fade_by_dist() }}
+
+up_dir = vector2(0.0, -1.0)
+up_dir = rotate_vec2(up_dir, -rot_calc - v_add_rot , float2(0.0, 0.0)) @ 0.5 + float2(0.5, 0.5)
+pat_rgb_result = merge_float3(up_dir.x, up_dir.y, 0.0) if color_mode == 1 else pat_rgb_result
+
+out_color = merge_float4(pat_rgb_result.x, pat_rgb_result.y, pat_rgb_result.z, out_alpha)
+
+:: if set_output
+_OUT_ = out_color
+:: endif
+:: endmacro
+
+#################################################################################################
+
+# grayscale macro for bridges
+:: macro calculate_bridge_grayscale():
+pat_offset_for_color = b_offs
+out_alpha = out_color.x
+{{ masking_and_fade_by_dist(false) }}
+
+col_range = col_mod * uniform_ab(1.0-col_var_mod * bridge_color_var, 1.0)
+out_color = out_color @ (col_range * out_alpha)
+
+_OUT_ = out_color
+:: endmacro
+
+#################################################################################################
+
+# color macro for bridges
+:: macro calculate_bridge_color(color_modifier_index=19):
+pat_offset_for_color = b_offs
+{{ get_bridge_modifier("hue_mod", "bridge_hue_var_mod") }}
+{{ get_bridge_modifier("sat_mod", "bridge_sat_var_mod") }}
+{{ get_bridge_modifier("lum_mod", "bridge_lum_var_mod") }}
+{{ get_bridge_modifier("opa_mod", "bridge_opa_var_mod") }}
+
+{{ get_bridge_modifier("intencity_mod", "bridge_vm_intencity_mod") }}
+{{ get_bridge_modifier("intencity_var_mod", "bridge_vm_intencity_var_mod") }}
+{{ get_bridge_modifier("add_rot_mod", "bridge_vm_add_rot_mod") }}
+{{ get_bridge_modifier("add_rot_var_mod", "bridge_vm_add_rot_var_mod") }}
+
+color_modifier = samplecol(vector2(mod_sample, 0.5), {{ color_modifier_index }}, 0)
+
+v_intencity = get_float("v_intencity")
+v_add_rot = get_float("v_add_rot")
+
+b_v_intencity = v_intencity * intencity_mod + uniform_ab(-bridge_vm_intencity_var, bridge_vm_intencity_var) * intencity_var_mod
+b_v_add_rot = v_add_rot + add_rot_mod + uniform_ab(-bridge_vm_add_rot_var, bridge_vm_add_rot_var) * add_rot_var_mod
+
+hsl_mod = merge_float3(hue_mod, sat_mod, lum_mod)
+pat_color = out_color * color_modifier if bridge_use_color_mod else out_color
+
+pat_color_hsl = rgbtohsv(pat_color.xyz)
+pat_color_hsl_var = bridge_color_var.xyz * hsl_mod
+
+pat_color_base = pat_color_hsl - pat_color_hsl_var * pat_color_hsl
+pat_hsl_result = uniform_f3_ab(pat_color_base, pat_color_hsl)
+pat_rgb_result = hsvtorgb(pat_hsl_result)
+
+alpha_base = pat_color.w
+alpha_var = alpha_base - bridge_color_var.w * opa_mod * alpha_base
+alpha_calc = uniform_ab(alpha_var, alpha_base)
+
+out_alpha = alpha_calc if color_mode == 0 else b_v_intencity
+
+{{ masking_and_fade_by_dist(false) }}
+
+up_dir = vector2(0.0, -1.0)
+up_dir = rotate_vec2(up_dir, -rot_calc - b_v_add_rot , float2(0.0, 0.0)) @ 0.5 + float2(0.5, 0.5)
+pat_rgb_result = merge_float3(up_dir.x, up_dir.y, 0.0) if color_mode == 1 else pat_rgb_result
+
+out_color = merge_float4(pat_rgb_result.x, pat_rgb_result.y, pat_rgb_result.z, out_alpha)
+
+_OUT_ = out_color
+
+:: endmacro
+
+#################################################################################################

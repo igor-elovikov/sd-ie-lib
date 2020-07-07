@@ -1,0 +1,49 @@
+:: import "point_cloud.sex" as pc
+
+pc_index = get_int("pc_index")
+min_distance = get_float("min_distance")
+
+n = toint(get_float("$number"))
+
+{{ pc.init_pcloud("pcloud") }}
+
+last_iteration = (n == toint(pcloud_meta.x))
+self_check = (n == pc_index)
+
+sample_idx = n
+
+{{ pc.get_pcloud_point_noattr("pcloud", "sample_idx", "sample_cloud") }}
+{{ pc.get_pcloud_point_noattr("pcloud", "pc_index", "sample_origin") }}
+
+pos_origin = sample_origin.xy
+
+:: if tiled
+pos_origin = pos_origin % float2(1.0, 1.0)
+:: endif
+
+skip_iteration = self_check or last_iteration
+
+:: set checks = 9 if tiled else 1
+
+:: for i in range(checks)
+
+pos_comp = sample_cloud.xy + vector2({{ pc.tile_offset[i] }})
+
+dist_vec = pos_origin - pos_comp
+dist = length_vec2(dist_vec)
+mdist = dist if dist < min_distance and not skip_iteration else min_distance
+
+min_distance = mdist 
+
+:: endfor
+
+color_out = merge_float4(pos_origin.x, pos_origin.y, min_distance , 1.0)
+pos_out = sample_uv
+size_out = pcloud_frag_size
+
+_OUT_ = last_iteration
+
+export(color_out)
+export(pos_out)
+export(size_out)
+export(min_distance)

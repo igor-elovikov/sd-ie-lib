@@ -1,0 +1,102 @@
+:: import "particle_system.sex" as ps
+:: import "point_cloud.sex" as pc
+
+declare_inputs("particle_system")
+
+{{ pc.init_pcloud("pcloud") }}
+
+lifetime_rand = tofloat(lifetime) * (1.0 - lifetime_random)
+p_lifetime = toint(uniform_ab(lifetime_rand, tofloat(lifetime)))
+stop_simulation = 0
+
+# calculate start position
+
+emitter_direction = 0.0
+p_position = start_position
+
+# calculate line position
+
+line_vec = end_position - start_position
+line_pos = start_position + line_vec @ uniform_ab(0.0, 1.0)
+line_direction = atan2(line_vec) / _2pi()
+
+# calculate circle position
+
+circle_rad = uniform_ab(emitter_radius.x, emitter_radius.y)
+circle_arc = uniform_ab(emitter_arc.x, emitter_arc.y)
+
+circle_vec = vector2(-circle_rad, 0.0)
+circle_vec = rotate_vec2(circle_vec, -circle_arc, float2(0.0, 0.0))
+
+circle_pos = start_position + circle_vec
+circle_direction = circle_arc
+
+# sample point cloud
+
+sample_idx = toint(uniform_ab(0.0, pcloud_meta.x )) 
+sample_idx = toint(get_float("$number")) if emitter_type == 3 and pcloud_random else sample_idx
+
+{{ pc.get_pcloud_point("pcloud", "sample_idx", "point", 23) }}
+
+cloud_direction = point.z 
+
+# set start position
+
+p_position = line_pos if emitter_type == 1 else p_position
+p_position = circle_pos if emitter_type == 2 else p_position
+p_position = point.xy if emitter_type == 3 else p_position
+
+emitter_direction = line_direction if emitter_type == 1 else emitter_direction
+emitter_direction = circle_direction if emitter_type == 2 else emitter_direction
+emitter_direction = cloud_direction if emitter_type == 3 else emitter_direction
+
+# offset start position by random offset
+unit_rand = rotate_vec2(float2(1.0, 0.0), uniform_ab(0.0, 1.0), float2(0.0, 0.0))
+pos_offset = uniform_ab(0.0, offset_random)
+p_position = p_position + unit_rand @ pos_offset
+
+# inititalize parameters
+{{ ps.init_parameter_random("mass", 0, false, true) }}
+{{ ps.init_parameter_random("drag", 1, false, true) }}
+{{ ps.init_parameter_random("color", 2, false, true) }}
+{{ ps.init_parameter_var("ang_velocity", 3) }}
+{{ ps.init_parameter_random("size", 4, false, true) }}
+{{ ps.init_parameter_var("orientation", 5, true) }}
+{{ ps.init_parameter_random("masking", 6) }}
+
+{{ ps.init_parameter_var("direction_angle", -1, false, true) }}
+{{ ps.init_parameter_random("velocity", -1, false, true) }}
+
+
+p_direction_angle = p_direction_angle + emitter_direction if inherit_direction else p_direction_angle
+p_color = p_color * point_attrib.y if emitter_type == 3 else p_color
+p_size = p_size * point_attrib.x if emitter_type == 3 else p_size
+
+p_mass = p_mass * p_size if mass_mult == 1 else p_mass
+p_mass = p_mass * p_size * p_size if mass_mult == 1 else p_mass
+
+p_drag = p_drag * p_size if drag_mult == 1 else p_drag
+p_drag = p_drag * p_size * p_size if drag_mult == 1 else p_drag
+
+export(p_mass)
+export(p_drag)
+export(p_color)
+export(p_direction_angle)
+export(p_size)
+
+p_velocity_vec = vector2(-1.0, 0.0) @ (p_velocity * 0.001)
+p_velocity_vec = rotate_vec2(p_velocity_vec, -p_direction_angle, float2(0.0, 0.0))
+
+:: if pcloud_write
+n = get_float("$number")
+particle_index = toint(n)
+_OUT_ = p_lifetime if particle_index < get_int("total_particles") else 1
+export(particle_index)
+:: else
+_OUT_ = p_lifetime
+:: endif
+
+export(stop_simulation)
+export(p_lifetime)
+export(p_velocity_vec)
+export(p_position)

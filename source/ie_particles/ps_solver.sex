@@ -1,0 +1,175 @@
+:: import "particle_system.sex" as ps
+
+declare_inputs("particle_system")
+
+n = get_float("$number")
+ni = toint(n)
+lifetime = get_int("p_lifetime")
+lifetime = tofloat(lifetime)
+glob_lifetime = get_int("lifetime")
+step_limit = tofloat(glob_lifetime) * particle_step
+step_limit = toint(step_limit)
+
+
+total_lifetime = (lifetime - 1.0) if lifetime > 1.0 else 0.0
+itotal_lifetime = toint(total_lifetime)
+
+:: if pcloud_write
+cloud_index = get_int("cloud_index")
+particle_index = get_int("particle_index")
+:: endif
+
+norm_life = n / total_lifetime
+
+p_velocity_vec = get_float2("p_velocity_vec")
+gravity_vec = get_float2("gravity_vec")
+p_position = get_float2("p_position")
+p_size = get_float("p_size")
+p_color = get_float("p_color")
+p_mass = get_float("p_mass")
+p_drag = get_float("p_drag")
+p_orientation = get_float("p_orientation")
+p_ang_velocity = get_float("p_ang_velocity")
+p_masking = get_float("p_masking")
+stop_simulation = get_int("stop_simulation")
+
+{{ ps.calculate_modifier_sample() }}
+
+{{ ps.apply_modifiers("mass", 0) }}
+{{ ps.apply_modifiers("drag", 1) }}
+{{ ps.apply_modifiers("color", 2) }}
+{{ ps.apply_modifiers("ang_velocity", 3) }}
+{{ ps.apply_modifiers("size", 4) }}
+{{ ps.apply_modifiers("orientation", 5, true) }}
+{{ ps.apply_modifiers("masking", 6) }}
+
+# calculate velocity coeffs
+#p_velocity_vec = rotate_vec2(p_velocity_vec, p_ang_velocity * 0.001, float2(0.0, 0.0))
+p_velocity_norm = normalize_vec2(p_velocity_vec)
+p_direction = atan2(p_velocity_vec) / _2pi()
+p_v = length_vec2(p_velocity_vec)
+
+# update position (excluding first frame)
+p_position = p_position + p_velocity_vec if n > 0.0 else p_position
+
+# calculate forces
+force = samplecol(p_position, 8, 1)
+force = force.xy @ 2.0 - float2(1.0, 1.0) if use_force_map else float2(0.0, 0.0)
+force = float2(0.0, 0.0) if length_vec2(force) < 0.00001 else force
+
+# drag force
+drag_force = p_velocity_norm @ (-1.0 * p_v * p_v * p_drag)
+force = force + drag_force
+
+gravity_from_map = samplecol(p_position, 25, 1)
+gravity_from_map = gravity_from_map.xy @ 2.0 - float2(1.0, 1.0) if use_gravity_map else float2(0.0, 0.0)
+total_gravity = gravity_from_map @ gravity_scalar if use_gravity_map else gravity_vec
+
+# apply forces
+p_velocity_vec = p_velocity_vec + force @ ( 1.0 / p_mass) + total_gravity
+
+# clamp velocity
+max_velocity = max_velocity * 0.001
+p_velocity_norm = normalize_vec2(p_velocity_vec)
+p_v = length_vec2(p_velocity_vec)
+p_v = p_v if p_v < max_velocity else max_velocity
+p_velocity_vec = p_velocity_vec + p_velocity_norm @ p_v - p_velocity_vec if clamp_velocity else p_velocity_vec
+
+p_velocity_vec = rotate_vec2(p_velocity_vec, p_ang_velocity * 0.001, float2(0.0, 0.0))
+
+p_size_out = vector2(p_size, p_size)
+
+stop_mask = samplelum(p_position, 24, 0)
+stop_simulation = stop_simulation + 1 if stop_mask > stop_threshold and stop_sim_at_black else stop_simulation
+simulation_halted = stop_simulation > 1
+simulation_halted = True if stop_simulation > 0 and ni == 0 else simulation_halted
+
+masked = uniform_ab(0.0, 1.0) > p_masking
+masked = False if output_mode == 1 else masked
+
+p_color = 0.0 if masked else p_color
+p_color = 0.0 if output_mode == 0 and ni > step_limit else p_color
+p_color = 0.0 if ni % trail_quantize > 0 and not output_mode == 1 else p_color
+
+color_before_trim = p_color
+
+last_integration = (ni == itotal_lifetime)
+last_step = ((ni + 1) > step_limit and ni <= step_limit) or (itotal_lifetime <= step_limit and last_integration )
+simulation_first_stop = stop_simulation == 1 and ni <= step_limit
+last_step = simulation_first_stop or (last_step and stop_simulation < 1)
+
+:: if not pcloud_write
+p_color = 0.0 if simulation_halted else p_color
+p_color = 0.0 if output_mode == 1 and not last_step else p_color
+:: endif
+
+p_orientation_out = p_orientation + p_direction if velocity_orient else p_orientation
+
+# write simulation to pcloud
+
+:: if pcloud_write
+
+cloud_img_size = get_int2("cloud_img_size")
+fsize = get_float2("fsize")
+out_fragment_size = get_float2("out_fragment_size")
+
+p_orientation_out = 0.0
+
+# current frame
+cloud_masked = uniform_ab(0.0, 1.0) < pc_mask
+cloud_mask_sample = modifier_sample if point_cloud_type == 1 else modifier_sample_global
+cloud_mask = samplelum(cloud_mask_sample, 25, 0)
+cloud_masked = cloud_masked or uniform_ab(0.0, 1.0) >= cloud_mask 
+
+write_to_cloud = True
+write_to_cloud = write_to_cloud and not cloud_masked
+pcloud_quant = True if last_step else ni % pcloud_quantize == 0
+write_to_cloud = write_to_cloud and pcloud_quant
+write_to_cloud = write_to_cloud and not simulation_halted
+
+# check capacity
+write_to_cloud = write_to_cloud and cloud_index <= (cloud_img_size.a * cloud_img_size.b / 2 - 1)
+alpha = 1.0 if write_to_cloud else 0.0
+pos_color = merge_float4(p_position.x, p_position.y, p_direction + 0.5, alpha)
+p_flag = 1.0 if last_step else 0.0
+p_flag = 2.0 if last_step and stop_simulation > 0 else p_flag
+p_attribs = merge_float4(p_size, color_before_trim, p_flag, alpha)
+
+output_row = tofloat((cloud_index * 2) / cloud_img_size.a)
+output_column = tofloat((cloud_index * 2) % cloud_img_size.a)
+
+fcloud_index = tofloat(cloud_index)
+write_index = (particle_index == get_int("total_particles"))
+
+p_size_out = out_fragment_size
+p_position_out = out_fragment_size / float2(2.0, 2.0) + vector2(output_column, output_row) / (fsize - float2(1.0, 1.0)) * (float2(1.0, 1.0) - out_fragment_size) 
+
+#pos_color = merge_float4(0.5, 0.5, 0.0, alpha)
+p_color_out = merge_float4(fcloud_index, fsize.x, fsize.y, 1.0) if write_index else pos_color
+p_position_out = float2(1.0, 1.0) - out_fragment_size / float2(2.0, 2.0) if write_index else p_position_out
+
+cloud_index = cloud_index + 1 if write_to_cloud else cloud_index
+
+export(p_attribs)
+export(p_color_out)
+export(cloud_index)
+
+_OUT_ = 1 if write_index else 2
+
+:: else
+
+p_position_out = p_position
+p_color_out = merge_float4(p_color, p_color, p_color, p_color)
+export(p_color_out)
+
+_OUT_ = 0 if simulation_halted else 1
+
+:: endif
+
+stop_simulation = stop_simulation + 1 if stop_mask > stop_threshold and stop_sim_at_black else stop_simulation
+export(stop_simulation)
+export(p_size_out)
+export(p_orientation_out)
+export(p_position)
+export(p_position_out)
+export(p_velocity_vec)

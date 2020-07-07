@@ -1,0 +1,37 @@
+:: import "point_cloud.sex" as pc
+
+pc_index = get_int("pc_index")
+max_dist = get_float("#max_dist")
+
+pcloud_meta = get_float3("#pcloud_meta")
+pcloud_frag_size = get_float2("pcloud_frag_size")
+pcloud_size_half = get_float2("pcloud_size_half")
+sample_origin = get_float4("sample_origin")
+
+n = toint(get_float("$number"))
+
+last_iteration = (n == toint(pcloud_meta.x))
+self_check = (n == pc_index)
+
+{{ pc.get_pcloud_point_noattr("pcloud", "n", "sample_cloud") }}
+
+pos_origin = sample_origin.xy
+
+:: if tiled
+pos_origin = pos_origin % float2(1.0, 1.0)
+:: endif
+
+need_check = False
+
+:: set checks = 9 if tiled else 1
+:: for i in range(checks)
+pos_comp = sample_cloud.xy + vector2({{ pc.tile_offset[i] }})
+need_check = need_check or abs(pos_comp.x - pos_origin.x) < max_dist and abs(pos_comp.y - pos_origin.y) < max_dist
+:: endfor
+
+need_check = need_check or last_iteration
+need_check = need_check and not self_check
+
+_OUT_ = need_check
+
+export(sample_cloud)

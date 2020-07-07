@@ -1,0 +1,128 @@
+:: import "macros.sex" as macros
+
+:: if grayscale
+declare_inputs("curve_bridge_splatter")
+:: else
+declare_inputs("curve_bridge_splatter_color")
+:: endif
+
+src_point = get_float2("src_point")
+dst_point = get_float2("dst_point")
+out_color = get_float4("out_color")
+pattern_size_calc = get_float2("pattern_size_calc")
+source_offset = get_float2("source_offset")
+rot_calc = get_float("rot_calc")
+n = get_float("$number")
+bridge_samples = get_int("bridge_samples_calc")
+bridge_index = get_int("bridge_index")
+number = toint(n) + bridge_index
+
+bridge_samples_num = bridge_samples - 1 if bridge_samples > 1 else 1
+bridge_n = n / tofloat(bridge_samples_num) 
+
+frag_size = 1.0 / get_float2("$size").x
+mod_sample = frag_size / 2.0 + bridge_n * (1.0 - frag_size)
+:: for i in range(1, 9)
+modifier_op = modifier_{{ i }}_addmult
+bridge_modifier{{ i }} = samplelum(vector2(mod_sample, 0.5), {{ i + 9}}, 0)
+bridge_modifier{{ i }} = bridge_modifier{{ i }} * modifier_op.x + modifier_op.y
+:: endfor
+
+{{ macros.get_bridge_modifier("size_mod", "bridge_size_mod") }}
+{{ macros.get_bridge_modifier("size_mod_w", "br_size_modifier_idx_width") }}
+{{ macros.get_bridge_modifier("size_mod_h", "br_size_modifier_idx_height") }}
+{{ macros.get_bridge_modifier("size_var_mod", "bridge_size_var_mod") }}
+{{ macros.get_bridge_modifier("rot_mod", "bridge_rotation_mod", "0.0") }}
+{{ macros.get_bridge_modifier("rot_var_mod", "bridge_rotation_var_mod") }}
+{{ macros.get_bridge_modifier("v_mod", "bridge_vertical_offset_mod", "0.0") }}
+{{ macros.get_bridge_modifier("v_var_mod", "bridge_vertical_offset_var_mod") }}
+{{ macros.get_bridge_modifier("h_mod", "bridge_horizontal_offset_mod", "0.0") }}
+{{ macros.get_bridge_modifier("h_var_mod", "bridge_horizontal_offset_var_mod") }}
+:: if grayscale
+{{ macros.get_bridge_modifier("col_mod", "bridge_color_mod") }}
+{{ macros.get_bridge_modifier("col_var_mod", "bridge_color_var_mod") }}
+:: endif
+{{ macros.get_bridge_modifier("remap", "bridge_remapping_mod") }}
+{{ macros.get_bridge_modifier("mask_mod", "bridge_mask_mod") }}
+{{ macros.get_bridge_modifier("idx_mod", "bridge_idx_distr_mod") }}
+{{ macros.get_bridge_modifier("sym_mod", "bridge_symmetry_mod", "1.0") }}
+
+bridge_n = remap if bridge_remapping_mod > 0 and bridge_type == 1 else bridge_n
+
+norm_dir = get_float2("norm_dir")
+dir_x_axis = get_float2("dir_x_axis")
+bridge_length = get_float("bridge_length")
+
+v_offs_var = bridge_voffs_var * v_var_mod
+v_offs = v_mod + uniform_ab(-v_offs_var, v_offs_var)
+
+h_offs_var = bridge_hoffs_var * h_var_mod
+h_offs = h_mod + uniform_ab(-h_offs_var, h_offs_var)
+
+
+b_offs = norm_dir @ (v_offs * bridge_length) + dir_x_axis @ (h_offs * bridge_length)
+
+
+size_var = uniform_f2_ab(-bridge_size_var_nuniform, bridge_size_var_nuniform)
+size_var_u = uniform_ab(-bridge_size_var, bridge_size_var)
+size_var = vector2(size_var_u, size_var_u) if is_size_var_uniform and not is_size_relative else size_var
+
+size_m = vector2(size_mod, size_mod) if is_size_var_uniform else vector2(size_mod_w, size_mod_h)
+
+pattern_size_calc = (pattern_size_calc * size_m + size_var @ size_var_mod)
+
+
+point_calc = lerp(src_point, dst_point, bridge_n) + source_offset
+
+rot_var = bridge_rotation_var * rot_var_mod
+rot_calc = rot_calc + (rot_mod + uniform_ab(-rot_var, rot_var))
+
+pivot_pos = pivot_pos * pattern_size_calc
+
+pivot_rot_offset = rotate_vec2(pivot_pos, -rot_calc, float2(0.0, 0.0))
+point_calc = point_calc - pivot_rot_offset + b_offs
+
+# Calculate symmetry
+
+sym_mult = get_float2("sym_mult")
+{{ macros.symmetry_calculation("sym_mult_bridge") }}
+
+sym_mult = sym_mult * sym_mult_bridge
+
+bridge_pattern_size = pattern_size_calc * sym_mult
+bridge_pattern_rotation = rot_calc
+
+:: if grayscale
+{{ macros.calculate_bridge_grayscale() }}
+:: else
+{{ macros.calculate_bridge_color() }}
+:: endif
+
+# Calculate pattern index
+
+pattern_index = bridge_index
+
+ping_pong = 2 * inputs_num - 2
+ping_pong_loop = number % ping_pong
+pattern_ping_pong = ping_pong_loop if ping_pong_loop < inputs_num else ping_pong - ping_pong_loop 
+pattern_ping_pong = 0 if inputs_num == 1 else pattern_ping_pong
+
+pattern_random = uniform_ab(0.0, tofloat(inputs_num))
+pattern_random = toint(pattern_random)
+
+pattern_mod = idx_mod * tofloat(inputs_num)
+pattern_mod = toint(pattern_mod)
+pattern_mod = 0 if pattern_mod < 0 else pattern_mod
+pattern_mod = (inputs_num - 1) if pattern_mod > (inputs_num - 1) else pattern_mod
+
+pattern_index = number % inputs_num if pattern_bridge_distr_mode == 1 else pattern_index
+pattern_index = pattern_ping_pong if pattern_bridge_distr_mode == 2 else pattern_index
+pattern_index = pattern_random if pattern_bridge_distr_mode == 3 else pattern_index
+pattern_index = pattern_mod if pattern_bridge_distr_mode == 4 else pattern_index
+
+pattern_index = pattern_index + 2
+
+export(pattern_index)
+export(point_calc)
+export(bridge_pattern_size)
+export(bridge_pattern_rotation)

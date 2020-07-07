@@ -1,0 +1,65 @@
+:: import "point_cloud.sex" as pc
+
+pc_index = get_int("pc_index")
+total_distance = get_float2("total_distance")
+total_overlap = get_int("total_overlap")
+n = toint(get_float("$number"))
+
+pcloud_meta = get_float3("#pcloud_meta")
+pcloud_frag_size = get_float2("pcloud_frag_size")
+sample_origin = get_float4("sample_origin")
+sample_cloud = get_float4("sample_cloud")
+origin_uv = get_float2("origin_uv")
+gap = get_float("gap")
+
+last_iteration = (n == toint(pcloud_meta.x))
+self_check = (n == pc_index)
+
+sample_idx = n
+
+
+
+pos_origin = sample_origin.xy
+:: if tiled
+pos_origin = pos_origin % float2(1.0, 1.0)
+:: endif
+size_origin = sample_origin.z
+size_comp = sample_cloud.z
+size_sum = 0.5 * (size_comp + size_origin) + gap
+size_ratio = size_comp / (size_comp + size_origin)
+
+:: set checks = 9 if tiled else 1
+
+:: for i in range(checks)
+pos_comp = sample_cloud.xy + vector2({{ pc.tile_offset[i] }})
+
+dist_vec = pos_origin - pos_comp
+dist = length_vec2(dist_vec) 
+
+is_overlapped = (dist < size_sum)
+overlapping_length = size_sum - dist
+
+push_vec = normalize_vec2(dist_vec)
+push_vec = push_vec @ (overlapping_length * size_ratio)
+
+is_overlapped = is_overlapped and not self_check
+total_distance = total_distance + push_vec if is_overlapped and not last_iteration else total_distance
+total_overlap = total_overlap + 1 if is_overlapped and not last_iteration else total_overlap
+:: endfor
+
+new_pos = pos_origin + total_distance @ (1.0 / tofloat(total_overlap)) if total_overlap > 0 else pos_origin
+:: if tiled
+new_pos = new_pos % float2(1.0, 1.0)
+:: endif
+
+color_out = merge_float4(new_pos.x, new_pos.y, size_origin, 1.0)
+pos_out = origin_uv
+size_out = pcloud_frag_size
+
+_OUT_ = last_iteration
+
+export(color_out)
+export(pos_out)
+export(size_out)
+export(total_distance)
+export(total_overlap)

@@ -1,0 +1,71 @@
+:: macro init_pcloud(cloud_name)
+{{ cloud_name }}_meta = get_float3("#{{ cloud_name }}_meta")
+
+{{ cloud_name }}_frag_size = float2(1.0, 1.0) / {{ cloud_name }}_meta.yz
+{{ cloud_name }}_size_half = {{ cloud_name }}_frag_size / float2(2.0, 2.0)
+:: endmacro
+
+:: macro get_pcloud_point(cloud_name, sample_idx, sample_name, cloud_input = 0)
+row = ({{ sample_idx }} * 2) / toint({{ cloud_name }}_meta.y)
+column = ({{ sample_idx }} * 2) % toint({{ cloud_name }}_meta.y)
+
+rc = vector2(tofloat(column), tofloat(row)) 
+sample_uv = {{ cloud_name }}_size_half + rc *  {{ cloud_name }}_frag_size
+
+{{ sample_name }} = samplecol(sample_uv, {{ cloud_input }}, 0)
+{{ sample_name }}_attrib = samplecol(sample_uv + vector2({{ cloud_name }}_frag_size.x, 0.0), {{ cloud_input }}, 0)
+:: endmacro
+
+:: macro get_pcloud_point_noattr(cloud_name, sample_idx, sample_name, cloud_input = 0)
+row = ({{ sample_idx }} * 2) / toint({{ cloud_name }}_meta.y)
+column = ({{ sample_idx }} * 2) % toint({{ cloud_name }}_meta.y)
+
+rc = vector2(tofloat(column), tofloat(row)) 
+sample_uv = {{ cloud_name }}_size_half + rc *  {{ cloud_name }}_frag_size
+
+{{ sample_name }} = samplecol(sample_uv, {{ cloud_input }}, 0)
+:: endmacro
+
+:: macro pcloud_index_uv(uv_name, cloud_name, index)
+
+pc_row = ({{ index }} * 2) / toint({{ cloud_name }}_meta.y)
+pc_column = ({{ index }} * 2) % toint({{ cloud_name }}_meta.y)
+pc_rc = vector2(tofloat(pc_column), tofloat(pc_row))
+f2_one = float2(1.0, 1.0)
+
+{{ uv_name }} = {{ cloud_name }}_size_half + pc_rc / ( {{ cloud_name }}_meta.yz - f2_one ) * (f2_one - {{ cloud_name }}_frag_size )
+
+:: endmacro
+
+:: macro pp_init()
+size = get_float2("$size")
+pos = get_float2("$pos")
+frag_size = float2(1.0, 1.0) / size
+frag_size_half = frag_size / float2(2.0, 2.0)
+pixel_coord = size * (pos - frag_size_half)
+pixel_index = pixel_coord.y * size.x + pixel_coord.x
+pixel_index = toint(pixel_index)
+is_attrib = pixel_index % 2 > 0
+
+sample = samplecol(pos, 0, 0)
+attr_offset = vector2(-frag_size.x, 0.0) if is_attrib else vector2(frag_size.x, 0.0)
+neigh_sample = samplecol(pos + attr_offset, 0, 0)
+
+point = neigh_sample if is_attrib else sample
+point_attrib = sample if is_attrib else neigh_sample
+:: endmacro
+
+:: macro sample_curve(factor, npoints, is_closed, alpha, tension, point_prefix, start_index = 0):
+catmull_rom_16({{ factor }},
+    {{ npoints }},
+    {{ is_closed }},
+    {{ alpha }},
+    {{ tension }},
+:: for p_i in range(start_index, start_index + 16):
+    {{ point_prefix }}{{ p_i }},
+:: endfor 
+)
+:: endmacro
+
+:: set attrib_map = {1:"point.z", 2:"point_attrib.x", 3:"point_attrib.y", 4:"point_attrib.z"}
+:: set tile_offset = ["0.0, 0.0", "0.0, -1.0", "0.0, 1.0", "-1.0, 0.0", "1.0, 0.0", "1.0, -1.0", "1.0, 1.0", "-1.0, -1.0", "-1.0, 1.0"]
