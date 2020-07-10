@@ -17,7 +17,15 @@ lib/ie_pcloud.sbsar
 examples/pcloud_examples.sbs
 ```
 
+https://www.artstation.com/artwork/3dokNm
+
 ## IE Particles Solver
-...
+
+```
+source/ie_particles/ie_particles.sbs
+lib/ie_particles.sbsar
+examples/particles_examples.sbs
+```
+
 ## IE Processing
 ...
