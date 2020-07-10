@@ -14,10 +14,8 @@ step_limit = toint(step_limit)
 total_lifetime = (lifetime - 1.0) if lifetime > 1.0 else 0.0
 itotal_lifetime = toint(total_lifetime)
 
-:: if pcloud_write
 cloud_index = get_int("cloud_index")
 particle_index = get_int("particle_index")
-:: endif
 
 norm_life = n / total_lifetime
 
@@ -44,10 +42,11 @@ stop_simulation = get_int("stop_simulation")
 {{ ps.apply_modifiers("masking", 6) }}
 
 # calculate velocity coeffs
-#p_velocity_vec = rotate_vec2(p_velocity_vec, p_ang_velocity * 0.001, float2(0.0, 0.0))
-p_velocity_norm = normalize_vec2(p_velocity_vec)
-p_direction = atan2(p_velocity_vec) / _2pi()
+
 p_v = length_vec2(p_velocity_vec)
+p_velocity_norm = normalize_vec2(p_velocity_vec) if p_v > 0.0 else float2(0.0, 1.0)
+p_direction = atan2(p_velocity_vec) / _2pi()
+
 
 # update position (excluding first frame)
 p_position = p_position + p_velocity_vec if n > 0.0 else p_position
@@ -63,7 +62,7 @@ force = force + drag_force
 
 gravity_from_map = samplecol(p_position, 25, 1)
 gravity_from_map = gravity_from_map.xy @ 2.0 - float2(1.0, 1.0) if use_gravity_map else float2(0.0, 0.0)
-total_gravity = gravity_from_map @ gravity_scalar if use_gravity_map else gravity_vec
+total_gravity = gravity_from_map @ (gravity_scalar * 0.00001) if use_gravity_map else gravity_vec
 
 # apply forces
 p_velocity_vec = p_velocity_vec + force @ ( 1.0 / p_mass) + total_gravity
@@ -76,6 +75,16 @@ p_v = p_v if p_v < max_velocity else max_velocity
 p_velocity_vec = p_velocity_vec + p_velocity_norm @ p_v - p_velocity_vec if clamp_velocity else p_velocity_vec
 
 p_velocity_vec = rotate_vec2(p_velocity_vec, p_ang_velocity * 0.001, float2(0.0, 0.0))
+
+need_jitter = uniform_ab(0.0, 1.0) < direction_jitter_prob
+need_jitter = need_jitter and direction_jitter
+need_jitter = need_jitter and ni % direction_jitter_quant == 0
+need_jitter = need_jitter and ni > 0
+jitter = uniform_ab(direction_jitter_amount.x, direction_jitter_amount.y)
+jitter = -jitter if uniform_ab(0.0, 1.0) < 0.5 else jitter
+
+p_velocity_vec = rotate_vec2(p_velocity_vec, jitter, float2(0.0, 0.0)) if need_jitter else p_velocity_vec
+
 
 p_size_out = vector2(p_size, p_size)
 
@@ -107,19 +116,19 @@ p_orientation_out = p_orientation + p_direction if velocity_orient else p_orient
 
 # write simulation to pcloud
 
-:: if pcloud_write
+
 
 cloud_img_size = get_int2("cloud_img_size")
 fsize = get_float2("fsize")
 out_fragment_size = get_float2("out_fragment_size")
 
-p_orientation_out = 0.0
 
 # current frame
 cloud_masked = uniform_ab(0.0, 1.0) < pc_mask
 cloud_mask_sample = modifier_sample if point_cloud_type == 1 else modifier_sample_global
-cloud_mask = samplelum(cloud_mask_sample, 25, 0)
-cloud_masked = cloud_masked or uniform_ab(0.0, 1.0) >= cloud_mask 
+cloud_mask = samplelum(cloud_mask_sample, 27, 0) 
+map_masked = uniform_ab(0.0, 1.0) >= cloud_mask if point_cloud_type > 0 else False
+cloud_masked = cloud_masked or map_masked
 
 write_to_cloud = True
 write_to_cloud = write_to_cloud and not cloud_masked
@@ -127,12 +136,16 @@ pcloud_quant = True if last_step else ni % pcloud_quantize == 0
 write_to_cloud = write_to_cloud and pcloud_quant
 write_to_cloud = write_to_cloud and not simulation_halted
 
+write_to_cloud = True if last_step else write_to_cloud
+write_to_cloud = True if need_jitter and force_jitter else write_to_cloud
+
 # check capacity
 write_to_cloud = write_to_cloud and cloud_index <= (cloud_img_size.a * cloud_img_size.b / 2 - 1)
 alpha = 1.0 if write_to_cloud else 0.0
 pos_color = merge_float4(p_position.x, p_position.y, p_direction + 0.5, alpha)
-p_flag = 1.0 if last_step else 0.0
-p_flag = 2.0 if last_step and stop_simulation > 0 else p_flag
+p_flag = 1.0 if need_jitter else 0.0
+p_flag = 2.0 if last_step else p_flag
+p_flag = 3.0 if last_step and stop_simulation > 0 else p_flag
 p_attribs = merge_float4(p_size, color_before_trim, p_flag, alpha)
 
 output_row = tofloat((cloud_index * 2) / cloud_img_size.a)
@@ -141,18 +154,20 @@ output_column = tofloat((cloud_index * 2) % cloud_img_size.a)
 fcloud_index = tofloat(cloud_index)
 write_index = (particle_index == get_int("total_particles"))
 
-p_size_out = out_fragment_size
 p_position_out = out_fragment_size / float2(2.0, 2.0) + vector2(output_column, output_row) / (fsize - float2(1.0, 1.0)) * (float2(1.0, 1.0) - out_fragment_size) 
 
-#pos_color = merge_float4(0.5, 0.5, 0.0, alpha)
-p_color_out = merge_float4(fcloud_index, fsize.x, fsize.y, 1.0) if write_index else pos_color
 p_position_out = float2(1.0, 1.0) - out_fragment_size / float2(2.0, 2.0) if write_index else p_position_out
 
 cloud_index = cloud_index + 1 if write_to_cloud else cloud_index
 
 export(p_attribs)
-export(p_color_out)
 export(cloud_index)
+
+:: if pcloud_write
+
+p_orientation_out = 0.0
+p_size_out = out_fragment_size
+p_color_out = merge_float4(fcloud_index, fsize.x, fsize.y, 1.0) if write_index else pos_color
 
 _OUT_ = 1 if write_index else 2
 
@@ -160,13 +175,13 @@ _OUT_ = 1 if write_index else 2
 
 p_position_out = p_position
 p_color_out = merge_float4(p_color, p_color, p_color, p_color)
-export(p_color_out)
 
 _OUT_ = 0 if simulation_halted else 1
 
 :: endif
 
 stop_simulation = stop_simulation + 1 if stop_mask > stop_threshold and stop_sim_at_black else stop_simulation
+export(p_color_out)
 export(stop_simulation)
 export(p_size_out)
 export(p_orientation_out)

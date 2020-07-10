@@ -1,0 +1,64 @@
+declare_inputs("denoise")
+
+INV_SQRT_OF_2PI = 0.39894228040143267793994605993439
+INV_PI = 0.31830988618379067153776752674503
+
+:: set MRAD = 8
+:: set MRADQ = MRAD * MRAD
+
+tolerance = 0.01
+
+radius = floor(sigma * kSigma + 0.5)
+radQ = radius * radius
+
+invSigmaQx2 = 0.5 / (sigma * sigma)
+invSigmaQx2PI = INV_PI * invSigmaQx2
+
+invThresholdSqx2 = 0.5 / (threshold * threshold)
+invThresholdSqrt2PI = INV_SQRT_OF_2PI / threshold
+
+uv = get_float2("$pos")
+size = get_float2("$size")
+
+centrPx = samplelum(uv, 0, 0)
+
+zBuff = 0.0
+aBuff = 0.0
+
+radius_ceil = -radius - tolerance
+radius_floor = radius + tolerance
+
+:: for dx in range(-MRAD, MRAD + 1)
+
+pt = sqrt(radQ - {{ dx * dx | float }})
+pt = ceil(pt)
+
+use_iteration_dx = {{ dx | float }} > radius_ceil and {{ dx | float }} < radius_floor
+
+pt_ceil = -pt - tolerance
+pt_floor = pt + tolerance
+
+:: for dy in range(-MRAD, MRAD + 1)
+
+use_iteration_dy = {{ dy | float }} > pt_ceil and {{ dy | float }} < pt_floor
+use_iteration = use_iteration_dx and use_iteration_dy
+
+
+d = vector2({{ dx | float }}, {{ dy | float}})
+blurFactor = exp( -(d ^ d) * invSigmaQx2 ) * invSigmaQx2PI
+
+walkPx = samplelum(uv + d / size, 0, 0)
+
+dc = walkPx - centrPx
+deltaFactor = exp( - dc * dc * invThresholdSqx2) * invThresholdSqrt2PI * blurFactor
+
+zBuff = zBuff + deltaFactor if use_iteration else zBuff
+aBuff = aBuff + deltaFactor * walkPx if use_iteration else aBuff
+
+:: endfor
+
+:: endfor
+
+res = aBuff / zBuff
+
+_OUT_ = merge_float4(res, res, res, res)

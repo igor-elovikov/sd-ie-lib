@@ -8,10 +8,14 @@ declare_inputs("particle_system")
 lifetime_rand = tofloat(lifetime) * (1.0 - lifetime_random)
 p_lifetime = toint(uniform_ab(lifetime_rand, tofloat(lifetime)))
 stop_simulation = 0
+n = get_float("$number")
+total_particles = get_int("total_particles")
 
 # calculate start position
 
 emitter_direction = 0.0
+norm_particle = n / tofloat(total_particles)
+emitter_direction = norm_particle if uniform_direction else emitter_direction
 p_position = start_position
 
 # calculate line position
@@ -24,6 +28,7 @@ line_direction = atan2(line_vec) / _2pi()
 
 circle_rad = uniform_ab(emitter_radius.x, emitter_radius.y)
 circle_arc = uniform_ab(emitter_arc.x, emitter_arc.y)
+circle_arc = norm_particle if uniform_direction else circle_arc
 
 circle_vec = vector2(-circle_rad, 0.0)
 circle_vec = rotate_vec2(circle_vec, -circle_arc, float2(0.0, 0.0))
@@ -68,15 +73,17 @@ p_position = p_position + unit_rand @ pos_offset
 {{ ps.init_parameter_random("velocity", -1, false, true) }}
 
 
-p_direction_angle = p_direction_angle + emitter_direction if inherit_direction else p_direction_angle
-p_color = p_color * point_attrib.y if emitter_type == 3 else p_color
-p_size = p_size * point_attrib.x if emitter_type == 3 else p_size
+p_direction_angle = p_direction_angle + emitter_direction if pc_inherit_direction else p_direction_angle
+p_color = p_color * point_attrib.y if emitter_type == 3 and pc_inherit_color else p_color
+p_size = p_size * point_attrib.x if emitter_type == 3 and pc_inherit_size else p_size
 
 p_mass = p_mass * p_size if mass_mult == 1 else p_mass
-p_mass = p_mass * p_size * p_size if mass_mult == 1 else p_mass
+p_mass = p_mass * p_size * p_size if mass_mult == 2 else p_mass
+p_mass = p_mass * 1000.0
 
 p_drag = p_drag * p_size if drag_mult == 1 else p_drag
-p_drag = p_drag * p_size * p_size if drag_mult == 1 else p_drag
+p_drag = p_drag * p_size * p_size if drag_mult == 2 else p_drag
+p_drag = p_drag * 1000.0
 
 export(p_mass)
 export(p_drag)
@@ -84,14 +91,14 @@ export(p_color)
 export(p_direction_angle)
 export(p_size)
 
-p_velocity_vec = vector2(-1.0, 0.0) @ (p_velocity * 0.001)
-p_velocity_vec = rotate_vec2(p_velocity_vec, -p_direction_angle, float2(0.0, 0.0))
+p_velocity_vec = vector2(-1.0, 0.0) @ (p_velocity * 0.001) 
+p_velocity_vec = rotate_vec2(p_velocity_vec, -p_direction_angle, float2(0.0, 0.0)) 
+
+particle_index = toint(n)
+export(particle_index)
 
 :: if pcloud_write
-n = get_float("$number")
-particle_index = toint(n)
-_OUT_ = p_lifetime if particle_index < get_int("total_particles") else 1
-export(particle_index)
+_OUT_ = p_lifetime if particle_index < total_particles else 1
 :: else
 _OUT_ = p_lifetime
 :: endif
